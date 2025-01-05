@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Audio Mixer</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css">
+	<link rel="stylesheet" href="src/styles.css">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+
+<body>
+	<div id="audio-mixer" class="dark">
+		<div class="track-container" data-track="instrumental">
+			<h2>Instrumental Track</h2>
+			<div class="meters">
+				<div class="meter">
+					<h3>Waveform</h3>
+					<canvas id="instrumental-wave"></canvas>
+				</div>
+				<div class="meter">
+					<h3>Spectrum</h3>
+					<canvas id="instrumental-bars"></canvas>
+				</div>
+				<div class="meter">
+					<h3>Circle</h3>
+					<canvas id="instrumental-circle"></canvas>
+				</div>
+			</div>
+			<div class="volume-controls">
+				<span class="volume-label">Volume</span>
+				<input type="range" id="instrumental-volume" min="0" max="1" step="0.01" value="1">
+			</div>
+		</div>
+
+		<div class="track-container" data-track="vocal">
+			<h2>Vocal Track</h2>
+			<div class="meters">
+				<div class="meter">
+					<h3>Waveform</h3>
+					<canvas id="vocal-wave"></canvas>
+				</div>
+				<div class="meter">
+					<h3>Spectrum</h3>
+					<canvas id="vocal-bars"></canvas>
+				</div>
+				<div class="meter">
+					<h3>Circle</h3>
+					<canvas id="vocal-circle"></canvas>
+				</div>
+			</div>
+			<div class="volume-controls">
+				<span class="volume-label">Volume</span>
+				<input type="range" id="vocal-volume" min="0" max="1" step="0.01" value="1">
+			</div>
+		</div>
+
+		<div class="track-container" data-track="master">
+			<h2>Master Output</h2>
+			<div class="meters">
+				<div class="meter">
+					<h3>Waveform</h3>
+					<canvas id="master-wave"></canvas>
+				</div>
+				<div class="meter">
+					<h3>Spectrum</h3>
+					<canvas id="master-bars"></canvas>
+				</div>
+				<div class="meter">
+					<h3>Circle</h3>
+					<canvas id="master-circle"></canvas>
+				</div>
+			</div>
+			<div class="volume-controls">
+				<span class="volume-label">Volume</span>
+				<input type="range" id="master-volume" min="0" max="1" step="0.01" value="1">
+			</div>
+		</div>
+
+		<div class="transport-controls">
+			<div class="transport-buttons">
+				<button id="play"><i class="fas fa-play"></i></button>
+				<button id="pause"><i class="fas fa-pause"></i></button>
+				<button id="stop"><i class="fas fa-stop"></i></button>
+			</div>
+			<input type="range" id="seek" min="0" max="100" value="0">
+			<span id="time-display">00:00 / 00:00</span>
+		</div>
+
+		<button id="volume-toggle"><i class="fas fa-volume-up"></i></button>
+
+		<div class="volume-menu" style="display: none;">
+			<div class="volume-menu-header">
+				<span class="volume-menu-title">Volume Controls</span>
+				<button id="close-volume"><i class="fas fa-times"></i></button>
+			</div>
+			
+			<div class="volume-slider-container">
+				<div class="volume-slider-label">
+					<span>Master Output <i class="fas fa-info-circle" title="Main output volume for all tracks"></i></span>
+					<span class="volume-slider-value">100%</span>
+				</div>
+				<input type="range" id="master-volume" min="0" max="1" step="0.01" value="1">
+			</div>
+
+			<div class="volume-slider-container">
+				<div class="volume-slider-label">
+					<span>Instrumental <i class="fas fa-info-circle" title="Volume for the instrumental track"></i></span>
+					<span class="volume-slider-value">100%</span>
+				</div>
+				<input type="range" id="instrumental-volume" min="0" max="1" step="0.01" value="1">
+			</div>
+
+			<div class="volume-slider-container">
+				<div class="volume-slider-label">
+					<span>Vocals <i class="fas fa-info-circle" title="Volume for the vocal track"></i></span>
+					<span class="volume-slider-value">100%</span>
+				</div>
+				<input type="range" id="vocal-volume" min="0" max="1" step="0.01" value="1">
+			</div>
+		</div>
+
+		<button id="settings-toggle"><i class="fas fa-cog"></i></button>
+
+		<div class="settings-panel" style="display: none;">
+			<div class="settings-header">
+				<span class="settings-title">Settings</span>
+				<button id="close-settings"><i class="fas fa-times"></i></button>
+			</div>
+			
+			<div class="settings-section">
+				<h3 class="settings-section-title">Appearance</h3>
+				<button id="theme-toggle">Toggle Theme</button>
+			</div>
+
+			<div class="settings-section">
+				<h3 class="settings-section-title">Audio Files</h3>
+				<button id="change-files">Change Audio Files</button>
+			</div>
+
+			<div class="settings-section">
+				<h3 class="settings-section-title">Audio Settings</h3>
+				<div class="settings-option">
+					<label>
+						<input type="checkbox" id="auto-normalize">
+						Auto Normalize Levels
+					</label>
+				</div>
+				<div class="settings-option">
+					<label>
+						<input type="checkbox" id="stereo-enhancement">
+						Stereo Enhancement
+					</label>
+				</div>
+			</div>
+
+			<div class="settings-section">
+				<h3 class="settings-section-title">Performance</h3>
+				<div class="settings-option">
+					<label>
+						<input type="checkbox" id="high-quality">
+						High Quality Processing
+					</label>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+	<script type="module">
+		import app from './src/app.js';
+		
+		if ('serviceWorker' in navigator) {
+			navigator.serviceWorker.register('./src/serviceWorker.js')
+				.then(registration => {
+					console.log('ServiceWorker registration successful');
+				})
+				.catch(err => {
+					console.log('ServiceWorker registration failed: ', err);
+				});
+		}
+	</script>
+</body>
+
+</html>
