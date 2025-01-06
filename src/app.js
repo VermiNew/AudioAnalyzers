@@ -244,37 +244,53 @@ class AudioMixerApp extends EventEmitter {
 
         // Volume controls with value display
         ['instrumental', 'vocal', 'master'].forEach(track => {
-            // Find all volume sliders for the track (in menu and main interface)
-            const volumeControls = document.querySelectorAll(`input[type="range"]#${track}-volume`);
+            const volumeSlider = document.getElementById(`${track}-volume-menu`);
+            const volumeValue = volumeSlider.closest('.volume-slider-container').querySelector('.volume-slider-value');
             
-            volumeControls.forEach(volumeControl => {
-                const volumeValue = volumeControl.closest('.volume-slider-container')?.querySelector('.volume-slider-value');
-                
-                // Set initial value
-                if (volumeValue) {
-                    volumeValue.textContent = `${Math.round(volumeControl.value * 100)}%`;
-                }
-                
-                volumeControl.addEventListener('input', (e) => {
-                    const value = Math.round(e.target.value * 100);
-                    
-                    // Update all sliders for this track
-                    volumeControls.forEach(control => {
-                        if (control !== e.target) {
-                            control.value = e.target.value;
-                        }
-                    });
-                    
-                    // Update displayed value
-                    const valueDisplay = e.target.closest('.volume-slider-container')?.querySelector('.volume-slider-value');
-                    if (valueDisplay) {
-                        valueDisplay.textContent = `${value}%`;
-                    }
-                    
-                    // Set volume in audio processor
-                    this.audioProcessor.setVolume(track, e.target.value);
-                });
+            volumeSlider.addEventListener('input', (e) => {
+                const value = Math.round(e.target.value * 100);
+                volumeValue.textContent = `${value}%`;
+                this.audioProcessor.setVolume(track, e.target.value);
             });
+
+            // Solo and mute buttons for tracks (except master)
+            if (track !== 'master') {
+                const soloBtn = document.querySelector(`button.solo-btn[data-track="${track}"]`);
+                const muteBtn = document.querySelector(`button.mute-btn[data-track="${track}"]`);
+
+                if (soloBtn) {
+                    soloBtn.addEventListener('click', () => {
+                        const wasSolo = soloBtn.classList.contains('active');
+                        // Remove active state from other solo buttons if this is being activated
+                        if (!wasSolo) {
+                            document.querySelectorAll('button.solo-btn').forEach(btn => {
+                                if (btn !== soloBtn) {
+                                    btn.classList.remove('active');
+                                    const otherTrack = btn.getAttribute('data-track');
+                                    if (otherTrack) {
+                                        this.audioProcessor.soloStates.set(otherTrack, false);
+                                    }
+                                }
+                            });
+                        }
+                        soloBtn.classList.toggle('active');
+                        this.audioProcessor.toggleSolo(track);
+                    });
+                }
+
+                if (muteBtn) {
+                    muteBtn.addEventListener('click', () => {
+                        // If track is soloed, remove solo first
+                        const soloBtn = document.querySelector(`button.solo-btn[data-track="${track}"]`);
+                        if (soloBtn && soloBtn.classList.contains('active')) {
+                            soloBtn.classList.remove('active');
+                            this.audioProcessor.soloStates.set(track, false);
+                        }
+                        muteBtn.classList.toggle('active');
+                        this.audioProcessor.toggleMute(track);
+                    });
+                }
+            }
         });
 
         // Settings panel controls
@@ -313,10 +329,54 @@ class AudioMixerApp extends EventEmitter {
 
         if (autoNormalize) {
             autoNormalize.checked = this.settings.autoNormalize;
+            const normalizeLabel = autoNormalize.parentElement;
+            const infoSpan = document.createElement('span');
+            infoSpan.className = 'settings-info';
+            infoSpan.style.marginLeft = '8px';
+            infoSpan.style.fontSize = '0.8em';
+            infoSpan.style.opacity = '0.8';
+            normalizeLabel.appendChild(infoSpan);
+
             autoNormalize.addEventListener('change', (e) => {
                 this.settings.autoNormalize = e.target.checked;
                 this.audioProcessor.setAutoNormalize(e.target.checked);
+                
+                if (e.target.checked) {
+                    // Store current user volumes
+                    ['instrumental', 'vocal'].forEach(track => {
+                        const volume = this.audioProcessor.userVolumes.get(track);
+                        if (volume !== undefined) {
+                            const volumeControls = document.querySelectorAll(`input[type="range"]#${track}-volume`);
+                            volumeControls.forEach(control => {
+                                control.setAttribute('data-original-value', volume);
+                            });
+                        }
+                    });
+                    
+                    // Update info span
+                    this.updateNormalizationInfo();
+                } else {
+                    // Restore original volumes
+                    ['instrumental', 'vocal'].forEach(track => {
+                        const volumeControls = document.querySelectorAll(`input[type="range"]#${track}-volume`);
+                        volumeControls.forEach(control => {
+                            const originalValue = control.getAttribute('data-original-value');
+                            if (originalValue) {
+                                control.value = originalValue;
+                                this.audioProcessor.setVolume(track, parseFloat(originalValue));
+                            }
+                        });
+                    });
+                    infoSpan.textContent = '';
+                }
             });
+
+            // Update normalization info periodically when settings panel is visible
+            setInterval(() => {
+                if (document.querySelector('.settings-panel').style.display !== 'none' && this.settings.autoNormalize) {
+                    this.updateNormalizationInfo();
+                }
+            }, 1000);
         }
 
         if (stereoEnhancement) {
@@ -360,7 +420,16 @@ class AudioMixerApp extends EventEmitter {
         const stopButton = document.getElementById('stop');
         const seekBar = document.getElementById('seek');
 
-        if (playButton) playButton.onclick = () => this.audioProcessor.play();
+        if (playButton) {
+            playButton.onclick = async () => {
+                try {
+                    await this.audioProcessor.play();
+                } catch (error) {
+                    logger(`Error playing audio: ${error.message}`, 'ERROR');
+                    showErrorToast(`Error playing audio: ${error.message}`);
+                }
+            };
+        }
         if (pauseButton) pauseButton.onclick = () => this.audioProcessor.pause();
         if (stopButton) stopButton.onclick = () => this.audioProcessor.stop();
         if (seekBar) {
@@ -477,6 +546,27 @@ class AudioMixerApp extends EventEmitter {
             mixer.classList.toggle('dark');
             mixer.classList.toggle('light');
             showInfoToast(`Theme switched to ${this.theme} mode`);
+        }
+    }
+
+    updateNormalizationInfo() {
+        const infoSpan = document.querySelector('.settings-info');
+        if (!infoSpan) return;
+
+        let maxPeak = 0;
+        ['instrumental', 'vocal'].forEach(track => {
+            const source = this.audioProcessor.sources.get(track);
+            if (source && source.buffer) {
+                const peaks = this.audioProcessor.getPeaks(source.buffer);
+                maxPeak = Math.max(maxPeak, ...peaks);
+            }
+        });
+
+        if (maxPeak > 0) {
+            const normalizeGain = 0.8 / maxPeak;
+            infoSpan.textContent = `(Gain: ${(normalizeGain * 100).toFixed(1)}%)`;
+        } else {
+            infoSpan.textContent = '';
         }
     }
 }

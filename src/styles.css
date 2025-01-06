@@ -192,9 +192,13 @@ canvas {
     background-color: var(--dark-surface);
     border-radius: 8px;
     padding: var(--spacing-md);
-    width: 250px;
+    width: 320px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     z-index: 1000;
+}
+
+.light .volume-menu {
+    background-color: var(--light-surface);
 }
 
 .volume-menu-header {
@@ -206,27 +210,131 @@ canvas {
     border-bottom: 1px solid var(--dark-border);
 }
 
+.light .volume-menu-header {
+    border-bottom-color: var(--light-border);
+}
+
 .volume-menu-title {
-    font-size: 1rem;
+    font-size: 1.1rem;
     font-weight: 500;
 }
 
 .volume-slider-container {
-    margin-bottom: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+    padding: var(--spacing-xs) 0;
+}
+
+.volume-slider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-xs);
 }
 
 .volume-slider-label {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: var(--spacing-xs);
+    flex: 1;
     color: var(--dark-text-secondary);
-    font-size: 0.85rem;
+    font-size: 0.9rem;
+    margin-right: var(--spacing-sm);
+}
+
+.light .volume-slider-label {
+    color: var(--light-text-secondary);
 }
 
 .volume-slider-value {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.85rem;
+    min-width: 3.5em;
+    text-align: right;
+}
+
+.track-buttons {
+    display: flex;
+    gap: var(--spacing-xs);
+}
+
+.track-buttons button {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    background-color: transparent;
+    color: var(--dark-text-secondary);
+    border: 1px solid var(--dark-border);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-size: 0.75rem;
+}
+
+.light .track-buttons button {
+    color: var(--light-text-secondary);
+    border-color: var(--light-border);
+}
+
+.track-buttons button:hover {
+    background-color: var(--dark-primary);
+    color: var(--dark-text);
+    border-color: var(--dark-primary);
+    transform: scale(1.05);
+}
+
+.light .track-buttons button:hover {
+    background-color: var(--light-primary);
+    color: var(--light-text);
+    border-color: var(--light-primary);
+}
+
+.track-buttons button.active {
+    background-color: var(--dark-primary);
+    color: var(--dark-text);
+    border-color: var(--dark-primary);
+}
+
+.light .track-buttons button.active {
+    background-color: var(--light-primary);
+    color: var(--light-text);
+    border-color: var(--light-primary);
+}
+
+/* Input range styling */
+input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--dark-border);
+    outline: none;
+    margin: var(--spacing-xs) 0;
+}
+
+.light input[type="range"] {
+    background: var(--light-border);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--dark-primary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}
+
+.light input[type="range"]::-webkit-slider-thumb {
+    background: var(--light-primary);
 }
 
 /* Settings Panel */
@@ -291,26 +399,6 @@ button {
     font-family: 'Poppins', sans-serif;
     font-size: 0.9rem;
     font-weight: 500;
-}
-
-input[type="range"] {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 100%;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--dark-border);
-    outline: none;
-}
-
-input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--dark-primary);
-    cursor: pointer;
-    transition: all 0.2s ease;
 }
 
 /* Toggle buttons */
@@ -644,4 +732,57 @@ button:hover:not(:disabled) {
 
 button:active:not(:disabled) {
     transform: translateY(0);
+}
+
+.track-controls {
+    display: flex;
+    justify-content: flex-end;
+    padding: var(--spacing-sm);
+    margin-top: var(--spacing-sm);
+}
+
+.track-buttons {
+    display: flex;
+    gap: var(--spacing-xs);
+}
+
+.track-buttons button {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background-color: var(--dark-surface);
+    color: var(--dark-text-secondary);
+    border: 1px solid var(--dark-border);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.light .track-buttons button {
+    background-color: var(--light-surface);
+    color: var(--light-text-secondary);
+    border-color: var(--light-border);
+}
+
+.track-buttons button:hover {
+    background-color: var(--dark-primary);
+    color: var(--dark-text);
+    transform: scale(1.1);
+}
+
+.light .track-buttons button:hover {
+    background-color: var(--light-primary);
+    color: var(--light-text);
+}
+
+.track-buttons button.active {
+    background-color: var(--dark-primary);
+    color: var(--dark-text);
+}
+
+.light .track-buttons button.active {
+    background-color: var(--light-primary);
+    color: var(--light-text);
 }

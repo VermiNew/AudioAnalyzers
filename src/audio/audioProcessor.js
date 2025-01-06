@@ -2,7 +2,8 @@ import logger from '../utils/logger.js';
 
 class AudioProcessor {
     constructor() {
-        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // Create AudioContext
+        this.audioContext = null;
         this.instrumental = null;
         this.vocal = null;
         this.master = null;
@@ -15,24 +16,64 @@ class AudioProcessor {
         this.playing = false;
         this.startTime = 0;
         this.pauseTime = 0;
+        this.userVolumes = new Map();
         
         // Settings
         this.autoNormalize = false;
         this.stereoEnhancement = false;
         this.highQuality = true;
 
-        // Initialize master analyzer and gain nodes by default
-        this.setupAnalyzers('master');
-        
-        // Initialize effects chains and states
+        // Initialize states and default volumes
         ['instrumental', 'vocal', 'master'].forEach(track => {
-            this.effects.set(track, []);
-            this.soloStates.set(track, false);
-            this.muteStates.set(track, false);
+            try {
+                this.effects.set(track, []);
+                this.soloStates.set(track, false);
+                this.muteStates.set(track, false);
+                
+                // Set initial volumes
+                let volume = 0.7; // default for tracks
+                if (track === 'master') {
+                    volume = 0.95;
+                }
+                this.userVolumes.set(track, volume);
+            } catch (error) {
+                logger(`Error initializing track ${track}: ${error.message}`, 'ERROR');
+            }
         });
     }
 
-    setupAnalyzers(type) {
+    async initialize() {
+        if (this.audioContext) return;
+        
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+            latencyHint: 'playback',
+            sampleRate: 48000
+        });
+        
+        // Create limiter for master output
+        const limiter = this.audioContext.createDynamicsCompressor();
+        limiter.threshold.value = -1.0;  // dB
+        limiter.knee.value = 0.0;        // dB
+        limiter.ratio.value = 20.0;      // compression ratio
+        limiter.attack.value = 0.003;    // seconds
+        limiter.release.value = 0.25;    // seconds
+        limiter.connect(this.audioContext.destination);
+        
+        // Initialize master analyzer and gain nodes with limiter
+        await this.setupAnalyzers('master', limiter);
+        
+        // Set initial volumes
+        this.gainNodes.get('master').gain.value = this.userVolumes.get('master');
+
+        // Set initial volumes for tracks
+        ['instrumental', 'vocal'].forEach(track => {
+            if (this.gainNodes.has(track)) {
+                this.gainNodes.get(track).gain.value = this.userVolumes.get(track);
+            }
+        });
+    }
+
+    async setupAnalyzers(type, outputNode = null) {
         // Create RMS/Peak analyzer
         const rmsAnalyzer = this.audioContext.createAnalyser();
         rmsAnalyzer.fftSize = 2048;
@@ -43,16 +84,31 @@ class AudioProcessor {
         spectralAnalyzer.fftSize = 2048;
         spectralAnalyzer.smoothingTimeConstant = 0.85;
         
+        // Create gain node with anti-pop filter
         const gainNode = this.audioContext.createGain();
-        gainNode.gain.value = 1.0;
+        let volume;
+        if (type === 'master') {
+            volume = this.userVolumes.get('master');
+        } else {
+            volume = this.userVolumes.get(type);
+        }
+        
+        // Apply smooth initial volume
+        gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
+        gainNode.gain.linearRampToValueAtTime(volume, this.audioContext.currentTime + 0.1);
 
         // Connect the chain
         gainNode.connect(rmsAnalyzer);
         gainNode.connect(spectralAnalyzer);
         
         if (type === 'master') {
-            rmsAnalyzer.connect(this.audioContext.destination);
-            spectralAnalyzer.connect(this.audioContext.destination);
+            if (outputNode) {
+                rmsAnalyzer.connect(outputNode);
+                spectralAnalyzer.connect(outputNode);
+            } else {
+                rmsAnalyzer.connect(this.audioContext.destination);
+                spectralAnalyzer.connect(this.audioContext.destination);
+            }
         } else {
             rmsAnalyzer.connect(this.gainNodes.get('master'));
             spectralAnalyzer.connect(this.gainNodes.get('master'));
@@ -68,6 +124,9 @@ class AudioProcessor {
     }
 
     async loadFile(file, type) {
+        // Ensure AudioContext is initialized
+        await this.initialize();
+        
         logger(`Loading ${type} file: ${file.name}`, 'INFO');
         
         try {
@@ -76,11 +135,11 @@ class AudioProcessor {
             
             if (type === 'instrumental') {
                 this.instrumental = audioBuffer;
-                this.setupAnalyzers('instrumental');
+                await this.setupAnalyzers('instrumental');
                 logger('Instrumental loaded successfully', 'INFO');
             } else if (type === 'vocal') {
                 this.vocal = audioBuffer;
-                this.setupAnalyzers('vocal');
+                await this.setupAnalyzers('vocal');
                 logger('Vocal loaded successfully', 'INFO');
             }
 
@@ -93,28 +152,47 @@ class AudioProcessor {
 
     createBufferSource(buffer, type) {
         if (this.sources.get(type)) {
-            this.sources.get(type).disconnect();
-            this.sources.get(type).stop();
+            const oldSource = this.sources.get(type);
+            // Fade out old source
+            const currentTime = this.audioContext.currentTime;
+            oldSource.gain.setValueAtTime(oldSource.gain.value, currentTime);
+            oldSource.gain.linearRampToValueAtTime(0, currentTime + 0.1);
+            setTimeout(() => {
+                oldSource.disconnect();
+                oldSource.stop();
+            }, 100);
         }
 
         const source = this.audioContext.createBufferSource();
         source.buffer = buffer;
-        source.connect(this.gainNodes.get(type));
+        
+        // Add gain node to source for smooth transitions
+        const sourceGain = this.audioContext.createGain();
+        sourceGain.gain.setValueAtTime(0, this.audioContext.currentTime);
+        sourceGain.gain.linearRampToValueAtTime(1, this.audioContext.currentTime + 0.1);
+        
+        source.connect(sourceGain);
+        sourceGain.connect(this.gainNodes.get(type));
+        
+        // Store both source and its gain node
+        source.gain = sourceGain.gain;
         this.sources.set(type, source);
         
         logger(`Created buffer source for ${type}`, 'DEBUG');
         return source;
     }
 
-    play() {
+    async play() {
         if (this.playing) return;
+
+        // Ensure AudioContext is initialized and resumed
+        await this.initialize();
+        if (this.audioContext.state === 'suspended') {
+            await this.audioContext.resume();
+        }
 
         const currentTime = this.audioContext.currentTime;
         const offset = this.pauseTime;
-
-        if (this.audioContext.state === 'suspended') {
-            this.audioContext.resume();
-        }
 
         if (this.instrumental) {
             const instrumentalSource = this.createBufferSource(this.instrumental, 'instrumental');
@@ -152,8 +230,12 @@ class AudioProcessor {
     setVolume(type, value) {
         const gainNode = this.gainNodes.get(type);
         if (gainNode) {
-            gainNode.gain.value = value;
-            logger(`Volume for ${type} set to ${value}`, 'DEBUG');
+            this.userVolumes.set(type, value);
+            if (this.autoNormalize && type !== 'master') {
+                this.normalizeAudio();
+            } else {
+                gainNode.gain.value = value;
+            }
         }
     }
 
@@ -216,10 +298,10 @@ class AudioProcessor {
     reconnectEffectsChain(track) {
         const source = this.sources.get(track);
         const gainNode = this.gainNodes.get(track);
-        const analyzerNode = this.analyzerNodes.get(track);
+        const analyzers = this.analyzerNodes.get(track);
         const effects = this.effects.get(track);
 
-        if (!source || !gainNode || !analyzerNode) return;
+        if (!source || !gainNode || !analyzers) return;
 
         // Disconnect all nodes
         source.disconnect();
@@ -238,12 +320,16 @@ class AudioProcessor {
             }
         });
 
-        currentNode.connect(analyzerNode);
+        // Connect to analyzers
+        currentNode.connect(analyzers.rms);
+        currentNode.connect(analyzers.spectral);
         
         if (track === 'master') {
-            analyzerNode.connect(this.audioContext.destination);
+            analyzers.rms.connect(this.audioContext.destination);
+            analyzers.spectral.connect(this.audioContext.destination);
         } else {
-            analyzerNode.connect(this.gainNodes.get('master'));
+            analyzers.rms.connect(this.gainNodes.get('master'));
+            analyzers.spectral.connect(this.gainNodes.get('master'));
         }
     }
 
@@ -268,22 +354,38 @@ class AudioProcessor {
     }
 
     updateTrackStates() {
-        const anySolo = Array.from(this.soloStates.values()).some(state => state);
+        try {
+            const anySolo = Array.from(this.soloStates.values()).some(state => state);
 
-        ['instrumental', 'vocal'].forEach(track => {
-            const gainNode = this.gainNodes.get(track);
-            if (gainNode) {
-                const isMuted = this.muteStates.get(track);
-                const isSolo = this.soloStates.get(track);
-                
-                // If any track is soloed, only play soloed tracks
-                if (anySolo) {
-                    gainNode.gain.value = isSolo ? 1 : 0;
-                } else {
-                    gainNode.gain.value = isMuted ? 0 : 1;
+            ['instrumental', 'vocal'].forEach(track => {
+                const gainNode = this.gainNodes.get(track);
+                if (gainNode) {
+                    const isMuted = this.muteStates.get(track);
+                    const isSolo = this.soloStates.get(track);
+                    const userVolume = this.userVolumes.get(track);
+                    
+                    let finalVolume = userVolume;
+
+                    // If any track is soloed
+                    if (anySolo) {
+                        finalVolume = isSolo ? userVolume : 0;
+                    }
+                    
+                    // Apply mute state
+                    if (isMuted) {
+                        finalVolume = 0;
+                    }
+
+                    // Apply volume with smooth transition
+                    const currentTime = this.audioContext.currentTime;
+                    gainNode.gain.cancelScheduledValues(currentTime);
+                    gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
+                    gainNode.gain.linearRampToValueAtTime(finalVolume, currentTime + 0.05);
                 }
-            }
-        });
+            });
+        } catch (error) {
+            logger(`Error updating track states: ${error.message}`, 'ERROR');
+        }
     }
 
     setAutoNormalize(enabled) {
@@ -315,18 +417,25 @@ class AudioProcessor {
     normalizeAudio() {
         if (!this.autoNormalize) return;
 
+        let maxPeak = 0;
         ['instrumental', 'vocal'].forEach(track => {
             const source = this.sources.get(track);
             if (source && source.buffer) {
-                const buffer = source.buffer;
-                const peaks = this.getPeaks(buffer);
-                const maxPeak = Math.max(...peaks);
-                if (maxPeak > 0) {
-                    const gain = this.gainNodes.get(track);
-                    gain.gain.value = 1 / maxPeak;
-                }
+                const peaks = this.getPeaks(source.buffer);
+                maxPeak = Math.max(maxPeak, ...peaks);
             }
         });
+
+        if (maxPeak > 0) {
+            const normalizeGain = 0.8 / maxPeak; // Target level of 80%
+            ['instrumental', 'vocal'].forEach(track => {
+                const gain = this.gainNodes.get(track);
+                if (gain) {
+                    const userVolume = this.userVolumes.get(track);
+                    gain.gain.value = normalizeGain * userVolume;
+                }
+            });
+        }
     }
 
     getPeaks(buffer) {
@@ -346,7 +455,9 @@ class AudioProcessor {
     resetNormalization() {
         ['instrumental', 'vocal'].forEach(track => {
             const gain = this.gainNodes.get(track);
-            if (gain) gain.gain.value = 1;
+            if (gain) {
+                gain.gain.value = this.userVolumes.get(track);
+            }
         });
     }
 
@@ -354,13 +465,30 @@ class AudioProcessor {
         if (!this.stereoEnhancement) return;
 
         ['instrumental', 'vocal'].forEach(track => {
-            const source = this.sources.get(track);
-            if (source && source.buffer && source.buffer.numberOfChannels === 2) {
+            try {
+                const source = this.sources.get(track);
+                if (!source || !source.buffer || source.buffer.numberOfChannels !== 2) {
+                    logger(`Skipping stereo enhancement for ${track}: invalid source or not stereo`, 'DEBUG');
+                    return;
+                }
+
                 const stereoEnhancer = this.audioContext.createStereoPanner();
-                stereoEnhancer.pan.value = track === 'instrumental' ? -0.3 : 0.3;
+                let panValue = 0;
+                if (track === 'instrumental') {
+                    panValue = -0.3;
+                } else {
+                    panValue = 0.3;
+                }
+                stereoEnhancer.pan.value = panValue;
                 
-                // Insert the enhancer into the chain
+                // Remove any existing stereo enhancer
                 const effects = this.effects.get(track);
+                const enhancerIndex = effects.findIndex(e => e.type === 'stereo-enhancer');
+                if (enhancerIndex !== -1) {
+                    effects.splice(enhancerIndex, 1);
+                }
+                
+                // Add new stereo enhancer
                 effects.push({
                     type: 'stereo-enhancer',
                     node: stereoEnhancer,
@@ -368,6 +496,9 @@ class AudioProcessor {
                 });
                 
                 this.reconnectEffectsChain(track);
+                logger(`Stereo enhancement applied to ${track}`, 'DEBUG');
+            } catch (error) {
+                logger(`Error applying stereo enhancement to ${track}: ${error.message}`, 'ERROR');
             }
         });
     }

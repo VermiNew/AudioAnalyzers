@@ -1,12 +1,16 @@
-const CACHE_NAME = 'audio-mixer-v1';
+const CACHE_NAME = 'audio-analyzers-v1';
 const ASSETS = [
     '/',
-    '/index.html',
-    '/src/styles.css',
-    '/src/app.js',
-    '/src/audio/audioProcessor.js',
-    '/src/visualizers/meters.js',
-    '/src/utils/logger.js'
+    './index.html',
+    './src/styles.css',
+    './src/app.js',
+    './src/audio/audioProcessor.js',
+    './src/audio/visualizers.js',
+    './src/utils/logger.js',
+    './src/utils/showToast.js',
+    'https://cdn.jsdelivr.net/npm/toastify-js@1.12.0/src/toastify.min.css',
+    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
+    'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Poppins:wght@400;500;600&display=swap'
 ];
 
 // Install event - cache assets
@@ -14,7 +18,20 @@ self.addEventListener('install', event => {
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then(cache => {
-                return cache.addAll(ASSETS);
+                return Promise.all(
+                    ASSETS.map(url => {
+                        return fetch(url)
+                            .then(response => {
+                                if (!response.ok) {
+                                    throw new Error(`Failed to fetch ${url}`);
+                                }
+                                return cache.put(url, response);
+                            })
+                            .catch(error => {
+                                console.error(`Failed to cache ${url}:`, error);
+                            });
+                    })
+                );
             })
     );
 });
@@ -42,7 +59,25 @@ self.addEventListener('fetch', event => {
                 if (response) {
                     return response;
                 }
-                return fetch(event.request);
+                return fetch(event.request)
+                    .then(response => {
+                        // Don't cache audio files
+                        if (response.headers.get('content-type')?.includes('audio')) {
+                            return response;
+                        }
+                        
+                        // Clone the response before caching
+                        const responseToCache = response.clone();
+                        caches.open(CACHE_NAME)
+                            .then(cache => {
+                                cache.put(event.request, responseToCache);
+                            });
+                        return response;
+                    });
+            })
+            .catch(() => {
+                // Return offline fallback if available
+                return caches.match('./offline.html');
             })
     );
 });
