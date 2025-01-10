@@ -40,37 +40,55 @@ class AudioProcessor {
                 logger(`Error initializing track ${track}: ${error.message}`, 'ERROR');
             }
         });
+
+        this.bufferSize = 1024;
+        this.initialize();
     }
 
     async initialize() {
         if (this.audioContext) return;
         
-        this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-            latencyHint: 'playback',
-            sampleRate: 48000
-        });
+        logger('Initializing AudioProcessor', 'SYSTEM');
         
-        // Create limiter for master output
-        const limiter = this.audioContext.createDynamicsCompressor();
-        limiter.threshold.value = -1.0;  // dB
-        limiter.knee.value = 0.0;        // dB
-        limiter.ratio.value = 20.0;      // compression ratio
-        limiter.attack.value = 0.003;    // seconds
-        limiter.release.value = 0.25;    // seconds
-        limiter.connect(this.audioContext.destination);
-        
-        // Initialize master analyzer and gain nodes with limiter
-        await this.setupAnalyzers('master', limiter);
-        
-        // Set initial volumes
-        this.gainNodes.get('master').gain.value = this.userVolumes.get('master');
+        try {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                latencyHint: 'playback',
+                sampleRate: 48000
+            });
+            
+            logger(`AudioContext created with sample rate: ${this.audioContext.sampleRate}Hz`, 'DEBUG');
+            
+            // Create limiter for master output
+            this.limiter = this.audioContext.createDynamicsCompressor();
+            this.limiter.threshold.value = -1.0;  // dB
+            this.limiter.knee.value = 0.0;        // dB
+            this.limiter.ratio.value = 20.0;      // compression ratio
+            this.limiter.attack.value = 0.003;    // seconds
+            this.limiter.release.value = 0.25;    // seconds
+            this.limiter.connect(this.audioContext.destination);
+            
+            logger('Master limiter configured', 'DEBUG');
+            
+            // Initialize master analyzer and gain nodes with limiter
+            await this.setupAnalyzers('master', this.limiter);
+            
+            // Set initial volumes
+            this.gainNodes.get('master').gain.value = this.userVolumes.get('master');
+            logger(`Master volume set to ${this.userVolumes.get('master')}`, 'DEBUG');
 
-        // Set initial volumes for tracks
-        ['instrumental', 'vocal'].forEach(track => {
-            if (this.gainNodes.has(track)) {
-                this.gainNodes.get(track).gain.value = this.userVolumes.get(track);
-            }
-        });
+            // Set initial volumes for tracks
+            ['instrumental', 'vocal'].forEach(track => {
+                if (this.gainNodes.has(track)) {
+                    this.gainNodes.get(track).gain.value = this.userVolumes.get(track);
+                    logger(`${track} volume set to ${this.userVolumes.get(track)}`, 'DEBUG');
+                }
+            });
+            
+            logger('AudioProcessor initialization complete', 'SYSTEM');
+        } catch (error) {
+            logger(`Failed to initialize AudioProcessor: ${error.message}`, 'CRITICAL');
+            throw error;
+        }
     }
 
     async setupAnalyzers(type, outputNode = null) {
@@ -131,16 +149,19 @@ class AudioProcessor {
         
         try {
             const arrayBuffer = await file.arrayBuffer();
+            logger(`File ${file.name} loaded into memory`, 'DEBUG');
+            
             const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+            logger(`Audio data decoded successfully: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.numberOfChannels} channels`, 'DEBUG');
             
             if (type === 'instrumental') {
                 this.instrumental = audioBuffer;
                 await this.setupAnalyzers('instrumental');
-                logger('Instrumental loaded successfully', 'INFO');
+                logger('Instrumental track analyzers configured', 'DEBUG');
             } else if (type === 'vocal') {
                 this.vocal = audioBuffer;
                 await this.setupAnalyzers('vocal');
-                logger('Vocal loaded successfully', 'INFO');
+                logger('Vocal track analyzers configured', 'DEBUG');
             }
 
             return true;
@@ -177,6 +198,24 @@ class AudioProcessor {
         // Store both source and its gain node
         source.gain = sourceGain.gain;
         this.sources.set(type, source);
+
+        // Handle end of playback
+        source.onended = () => {
+            // Check if all sources have finished playing
+            const allSourcesEnded = Array.from(this.sources.values())
+                .every(src => !src.buffer || src.playbackState === 'finished');
+            
+            if (allSourcesEnded) {
+                this.stop();
+                this.playing = false;
+                this.pauseTime = 0;
+                this.startTime = 0;
+                if (this.onPlaybackEnd) {
+                    this.onPlaybackEnd();
+                }
+                logger('Playback finished', 'INFO');
+            }
+        };
         
         logger(`Created buffer source for ${type}`, 'DEBUG');
         return source;
@@ -185,56 +224,82 @@ class AudioProcessor {
     async play() {
         if (this.playing) return;
 
-        // Ensure AudioContext is initialized and resumed
-        await this.initialize();
-        if (this.audioContext.state === 'suspended') {
-            await this.audioContext.resume();
+        try {
+            // Ensure AudioContext is initialized and resumed
+            await this.initialize();
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+                logger('AudioContext resumed', 'DEBUG');
+            }
+
+            const currentTime = this.audioContext.currentTime;
+            const offset = this.pauseTime;
+
+            if (this.instrumental) {
+                const instrumentalSource = this.createBufferSource(this.instrumental, 'instrumental');
+                instrumentalSource.start(0, offset);
+                logger(`Instrumental playback started at offset ${offset.toFixed(2)}s`, 'DEBUG');
+            }
+
+            if (this.vocal) {
+                const vocalSource = this.createBufferSource(this.vocal, 'vocal');
+                vocalSource.start(0, offset);
+                logger(`Vocal playback started at offset ${offset.toFixed(2)}s`, 'DEBUG');
+            }
+
+            this.playing = true;
+            this.startTime = currentTime - offset;
+            logger('Playback started', 'INFO');
+        } catch (error) {
+            logger(`Error starting playback: ${error.message}`, 'ERROR');
+            throw error;
         }
-
-        const currentTime = this.audioContext.currentTime;
-        const offset = this.pauseTime;
-
-        if (this.instrumental) {
-            const instrumentalSource = this.createBufferSource(this.instrumental, 'instrumental');
-            instrumentalSource.start(0, offset);
-        }
-
-        if (this.vocal) {
-            const vocalSource = this.createBufferSource(this.vocal, 'vocal');
-            vocalSource.start(0, offset);
-        }
-
-        this.playing = true;
-        this.startTime = currentTime - offset;
-        logger('Playback started', 'INFO');
     }
 
     pause() {
         if (!this.playing) return;
         
-        this.pauseTime = this.audioContext.currentTime - this.startTime;
-        this.playing = false;
-        this.audioContext.suspend();
-        logger('Playback paused', 'INFO');
+        try {
+            this.pauseTime = this.audioContext.currentTime - this.startTime;
+            this.playing = false;
+            this.audioContext.suspend();
+            logger(`Playback paused at ${this.pauseTime.toFixed(2)}s`, 'INFO');
+        } catch (error) {
+            logger(`Error pausing playback: ${error.message}`, 'ERROR');
+            throw error;
+        }
     }
 
     stop() {
         if (!this.playing) return;
         
-        this.pauseTime = 0;
-        this.playing = false;
-        this.audioContext.suspend();
-        logger('Playback stopped', 'INFO');
+        try {
+            this.pauseTime = 0;
+            this.startTime = 0;
+            this.playing = false;
+            this.audioContext.suspend();
+            logger('Playback stopped', 'INFO');
+        } catch (error) {
+            logger(`Error stopping playback: ${error.message}`, 'ERROR');
+            throw error;
+        }
     }
 
     setVolume(type, value) {
         const gainNode = this.gainNodes.get(type);
         if (gainNode) {
-            this.userVolumes.set(type, value);
-            if (this.autoNormalize && type !== 'master') {
-                this.normalizeAudio();
-            } else {
-                gainNode.gain.value = value;
+            try {
+                this.userVolumes.set(type, value);
+                if (this.autoNormalize && type !== 'master') {
+                    this.normalizeAudio();
+                    logger(`Volume normalization applied for ${type}`, 'DEBUG');
+                } else {
+                    gainNode.gain.value = value;
+                    logger(`Volume set for ${type}: ${value}`, 'DEBUG');
+                }
+            } catch (error) {
+                logger(`Error setting volume for ${type}: ${error.message}`, 'ERROR');
+                throw error;
             }
         }
     }
@@ -246,13 +311,26 @@ class AudioProcessor {
 
     getCurrentTime() {
         if (!this.playing) return this.pauseTime;
-        return this.audioContext.currentTime - this.startTime;
+        const duration = this.getDuration();
+        const currentTime = this.audioContext.currentTime - this.startTime;
+        
+        // If we've reached the end of the audio
+        if (currentTime >= duration) {
+            this.playing = false;
+            this.pauseTime = duration;
+            this.startTime = 0;
+            return duration;
+        }
+        
+        return currentTime;
     }
 
     getDuration() {
-        return this.master ? this.master.duration :
-               this.instrumental ? this.instrumental.duration :
-               this.vocal ? this.vocal.duration : 0;
+        // Return the shortest duration of loaded tracks
+        const durations = [];
+        if (this.instrumental) durations.push(this.instrumental.duration);
+        if (this.vocal) durations.push(this.vocal.duration);
+        return durations.length > 0 ? Math.min(...durations) : 0;
     }
 
     seek(time) {
@@ -334,23 +412,25 @@ class AudioProcessor {
     }
 
     toggleSolo(track) {
-        const currentState = this.soloStates.get(track);
-        this.soloStates.set(track, !currentState);
-        
-        // Update gain nodes based on solo states
-        this.updateTrackStates();
-        
-        logger(`${track} solo ${!currentState ? 'enabled' : 'disabled'}`, 'DEBUG');
+        try {
+            this.soloStates.set(track, !this.soloStates.get(track));
+            this.updateTrackStates();
+            logger(`Solo toggled for ${track}: ${this.soloStates.get(track)}`, 'DEBUG');
+        } catch (error) {
+            logger(`Error toggling solo for ${track}: ${error.message}`, 'ERROR');
+            throw error;
+        }
     }
 
     toggleMute(track) {
-        const currentState = this.muteStates.get(track);
-        this.muteStates.set(track, !currentState);
-        
-        // Update gain nodes based on mute states
-        this.updateTrackStates();
-        
-        logger(`${track} mute ${!currentState ? 'enabled' : 'disabled'}`, 'DEBUG');
+        try {
+            this.muteStates.set(track, !this.muteStates.get(track));
+            this.updateTrackStates();
+            logger(`Mute toggled for ${track}: ${this.muteStates.get(track)}`, 'DEBUG');
+        } catch (error) {
+            logger(`Error toggling mute for ${track}: ${error.message}`, 'ERROR');
+            throw error;
+        }
     }
 
     updateTrackStates() {
@@ -389,29 +469,44 @@ class AudioProcessor {
     }
 
     setAutoNormalize(enabled) {
-        this.autoNormalize = enabled;
-        if (enabled) {
-            this.normalizeAudio();
-        } else {
-            this.resetNormalization();
+        try {
+            this.autoNormalize = enabled;
+            if (enabled) {
+                this.normalizeAudio();
+            } else {
+                this.resetNormalization();
+            }
+            logger(`Auto-normalize ${enabled ? 'enabled' : 'disabled'}`, 'INFO');
+        } catch (error) {
+            logger(`Error setting auto-normalize: ${error.message}`, 'ERROR');
+            throw error;
         }
-        logger(`Auto normalize ${enabled ? 'enabled' : 'disabled'}`, 'DEBUG');
     }
 
     setStereoEnhancement(enabled) {
-        this.stereoEnhancement = enabled;
-        if (enabled) {
-            this.enhanceStereo();
-        } else {
-            this.resetStereo();
+        try {
+            this.stereoEnhancement = enabled;
+            if (enabled) {
+                this.enhanceStereo();
+            } else {
+                this.resetStereo();
+            }
+            logger(`Stereo enhancement ${enabled ? 'enabled' : 'disabled'}`, 'INFO');
+        } catch (error) {
+            logger(`Error setting stereo enhancement: ${error.message}`, 'ERROR');
+            throw error;
         }
-        logger(`Stereo enhancement ${enabled ? 'enabled' : 'disabled'}`, 'DEBUG');
     }
 
     setHighQuality(enabled) {
-        this.highQuality = enabled;
-        this.updateQualitySettings();
-        logger(`High quality processing ${enabled ? 'enabled' : 'disabled'}`, 'DEBUG');
+        try {
+            this.highQuality = enabled;
+            this.updateQualitySettings();
+            logger(`High quality mode ${enabled ? 'enabled' : 'disabled'}`, 'INFO');
+        } catch (error) {
+            logger(`Error setting high quality mode: ${error.message}`, 'ERROR');
+            throw error;
+        }
     }
 
     normalizeAudio() {
@@ -524,6 +619,24 @@ class AudioProcessor {
                 analyzers.spectral.smoothingTimeConstant = this.highQuality ? 0.85 : 0.7;
             }
         });
+    }
+
+    setBufferSize(size) {
+        if (size && Number.isInteger(size) && size > 0) {
+            this.bufferSize = size;
+            logger('Buffer size updated: ' + size, 'DEBUG');
+            // Reinitialize analyzers with new buffer size if needed
+            if (this.initialized) {
+                this.setupAnalyzers();
+            }
+        }
+    }
+
+    setLimiterThreshold(value) {
+        if (this.limiter) {
+            this.limiter.threshold.value = value;
+            logger(`Limiter threshold set to ${value}dB`, 'DEBUG');
+        }
     }
 }
 

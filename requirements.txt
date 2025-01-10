@@ -1,0 +1,5 @@
+# Flask is used for web application framework and static file serving
+flask
+
+# Waitress is used for production-grade WSGI server
+waitress
